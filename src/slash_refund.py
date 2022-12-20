@@ -34,6 +34,7 @@ def getSlashBlock(url: str, val_address: str) -> int:
     endpoint = url + "/block_search?query=%22slash.address=%27" + val_address + "%27%22"
     data = getResponse(endpoint)
     latest_slash = len(data["result"]["blocks"]) - 1
+    print(f'Slash Height: {data["result"]["blocks"][latest_slash]["block"]["header"]["height"]}')
     return data["result"]["blocks"][latest_slash]["block"]["header"]["height"]
 
 
@@ -45,18 +46,28 @@ def getDelegationAmounts(
     page = 1
     page_limit = 200
     more_pages = True
+    last_page = 0
 
     while more_pages:
         endpoint_choice = (page % len(endpoints)) - 1
+        if page == last_page:
+            print(f"Retrying for {page}")
+        else:
+            print(f"Trying for {page}")
         result = run(
-            f"/home/schultzie/go/bin/{daemon} q staking delegations-to {valoper_address} --height {block_height} --page {page} --output json --limit {page_limit} --node {endpoints[endpoint_choice]} --chain-id {chain_id}",
+            f"/usr/local/bin/{daemon} q staking delegations-to {valoper_address} --height {block_height} --page {page} --output json --limit {page_limit} --node {endpoints[endpoint_choice]} --chain-id {chain_id}",
             shell=True,
             capture_output=True,
             text=True,
         )
+        sleep(2)
+        print(result.returncode)
         if result.returncode == 1:
             print(endpoints[endpoint_choice])
+            print(result.stderr)
+            last_page = page
             continue
+    
         response = json.loads(result.stdout)
 
         for delegation in response["delegation_responses"]:
@@ -66,10 +77,15 @@ def getDelegationAmounts(
                 delegations[delegator_address] = delegation_amount
             else:
                 print(delegator_address)
-        page += 1
+        if result.returncode == 0:
+            page += 1
+        else:
+            last_page = page
         sleep(2)
-        if len(response["delegation_responses"]) < page_limit < 20:
+        if len(response["delegation_responses"]) < page_limit:
             more_pages = False
+        else:
+            print(f'Delegation Responses: {len(response["delegation_responses"])}')
 
     return delegations
 
@@ -165,14 +181,14 @@ def issue_refunds(
     i = 0
     while i < batch_count:
         result = run(
-            f"/home/schultzie/go/bin/{daemon} tx sign /tmp/dist_{i}.json --from {keyname} -ojson --output-document ~/dist_signed.json --node {node} --chain-id {chain_id} --keyring-backend test",
+            f"/usr/local/bin/{daemon} tx sign /tmp/dist_{i}.json --from {keyname} -ojson --output-document ~/dist_signed.json --node {node} --chain-id {chain_id} --keyring-backend test",
             shell=True,
             capture_output=True,
             text=True,
         )
         sleep(1)
         result = run(
-            f"/home/schultzie/go/bin/{daemon} tx broadcast ~/dist_signed.json --node {node} --chain-id {chain_id}",
+            f"/usr/local/bin/{daemon} tx broadcast ~/dist_signed.json --node {node} --chain-id {chain_id}",
             shell=True,
             capture_output=True,
             text=True,
@@ -232,7 +248,7 @@ def parseArgs():
         "-s",
         "--send_address",
         dest="send_address",
-        required=True,
+        required=False,
         help="Address to send funds from",
     )
     parser.add_argument(
@@ -245,8 +261,17 @@ def parseArgs():
         "-k",
         "--keyname",
         dest="keyname",
-        required=True,
+        required=False,
         help="Wallet to issue refunds from",
+    )
+    parser.add_argument(
+        "-d",
+        "--dry-run",
+        dest="dryrun",
+        default=False,
+        required=False,
+        action='store_true',
+        help="Do not sign or broadcast tx, just prepare the batched .json files"
     )
     return parser.parse_args()
 
@@ -262,13 +287,16 @@ def main():
     send_address = args.send_address
     memo = args.memo
     keyname = args.keyname
+    dryrun = args.dryrun
 
     slash_block = getSlashBlock(endpoint, valcons_address)
     refund_amounts = calculateRefundAmounts(
         daemon, endpoint, chain_id, slash_block, valoper_address
     )
+    print("Creating batch .jsons in /tmp/dist*")
     batch_count = buildRefundScript(refund_amounts, send_address, denom, memo)
-    issue_refunds(batch_count, daemon, chain_id, keyname, endpoint)
+    if dryrun and keyname and send_address:
+        issue_refunds(batch_count, daemon, chain_id, keyname, endpoint)
 
 
 if __name__ == "__main__":
