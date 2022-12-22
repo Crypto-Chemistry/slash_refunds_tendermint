@@ -91,7 +91,7 @@ def getDelegationAmounts(
 
 
 def calculateRefundAmounts(
-    daemon: str, endpoint: str, chain_id: str, slash_block: int, valoper_address: str
+    daemon: str, endpoint: str, chain_id: str, slash_block: int, valoper_address: str, exclude_addresses: list
 ):
     pre_slack_block = int(slash_block) - 5
     refund_amounts = {}
@@ -109,7 +109,7 @@ def calculateRefundAmounts(
         refund_amount = int(pre_slash_delegations[delegation_address]) - int(
             post_slash_delegations[delegation_address]
         )
-        if refund_amount > 100:
+        if refund_amount > 100 and delegation_address not in exclude_addresses:
             refund_amounts[delegation_address] = refund_amount
 
     return refund_amounts
@@ -273,6 +273,15 @@ def parseArgs():
         action='store_true',
         help="Do not sign or broadcast tx, just prepare the batched .json files"
     )
+    parser.add_argument(
+        "-x",
+        "--exclude",
+        dest="exclude",
+        action="append",
+        required=False,
+        help="Addresses to exclude from refunds"
+    )
+
     return parser.parse_args()
 
 
@@ -288,14 +297,18 @@ def main():
     memo = args.memo
     keyname = args.keyname
     dryrun = args.dryrun
+    exclude_addresses = args.exclude
+
+    if not exclude_addresses:
+        exclude_addresses = []
 
     slash_block = getSlashBlock(endpoint, valcons_address)
     refund_amounts = calculateRefundAmounts(
-        daemon, endpoint, chain_id, slash_block, valoper_address
+        daemon, endpoint, chain_id, slash_block, valoper_address, exclude_addresses
     )
     print("Creating batch .jsons in /tmp/dist*")
     batch_count = buildRefundScript(refund_amounts, send_address, denom, memo)
-    if dryrun and keyname and send_address:
+    if not dryrun and keyname and send_address:
         issue_refunds(batch_count, daemon, chain_id, keyname, endpoint)
 
 
